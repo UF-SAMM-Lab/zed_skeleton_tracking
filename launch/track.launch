@@ -1,0 +1,12 @@
+<launch>
+
+    <arg name="debug" default="false" />
+    <arg unless="$(arg debug)" name="launch_prefix" value="" />
+    <arg     if="$(arg debug)" name="launch_prefix"
+           value="gdb --ex run --args" /> 
+
+    <node name="tracking" pkg="zed_skeleton_tracking" type="tracking" respawn="false" output="screen" launch-prefix="$(arg launch_prefix)">
+    </node> 
+    <!-- launch-prefix="gdb -ex run  -args"> -->
+    <!-- "gdb -.-ex run -.-args"  -->
+</launch>
