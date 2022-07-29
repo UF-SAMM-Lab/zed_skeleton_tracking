@@ -8,12 +8,14 @@
 #include <sensor_msgs/CompressedImage.h>
 #include <sensor_msgs/Image.h>
 #include <Eigen/Dense>
+#include <mutex>
+#include <ros/package.h>
 
 Eigen::MatrixXf transform_pixels_l(3,2);
 Eigen::MatrixXf transform_pixels_r(3,2);
 bool calibrate_transform = false;
 
-void zed_acquisition(int id, sl::Camera& zed, ros::Publisher joint_pub, ros::Publisher img_pub,ros::Publisher depth_pub,sl::Pose cam_pose, bool& run, sl::Timestamp& ts, Eigen::MatrixXf& pixel, Eigen::Matrix3f& points3D) {
+void zed_acquisition(int id, sl::Camera& zed, ros::Publisher joint_pub, ros::Publisher img_pub,ros::Publisher depth_pub,sl::Pose cam_pose, bool& run, sl::Timestamp& ts, Eigen::MatrixXf& pixel, Eigen::Matrix3f& points3D, std::mutex& mtx) {
 
     
     sl::Plane floor_plane; // floor plane handle
@@ -81,11 +83,16 @@ void zed_acquisition(int id, sl::Camera& zed, ros::Publisher joint_pub, ros::Pub
             zed.retrieveImage(image, sl::VIEW::LEFT);
             zed.retrieveMeasure(depth_map,sl::MEASURE::DEPTH);
             zed.retrieveMeasure(point_cloud, sl::MEASURE::XYZRGBA); 
+            mtx.lock();
             for (int i=0;i<pixel.rows();i++) {
                 sl::float4 point3D;
+                float depth_value=0;
+                depth_map.getValue(pixel(i,0),pixel(i,1),&depth_value);
+                // std::cout<<"cam:"<<id<<"px:"<<pixel.row(i)<<", depth:"<<depth_value<<std::endl;
                 point_cloud.getValue(pixel(i,0),pixel(i,1),&point3D);
                 points3D.col(i) = Eigen::Vector3f(point3D.x,point3D.y,point3D.z);
             }
+            mtx.unlock();
             img_msg.format = "jpeg";
             cv::imencode(".jpg", cv::Mat(camera_config.resolution.height,camera_config.resolution.width, CV_8UC4,image.getPtr<sl::uchar1>(sl::MEM::CPU)), img_msg.data);
             img_pub.publish(img_msg);
@@ -126,18 +133,19 @@ void zed_acquisition(int id, sl::Camera& zed, ros::Publisher joint_pub, ros::Pub
 }
 
 void calibrate_pts_callback(const std_msgs::Float32MultiArray::ConstPtr& msg) {
-    Eigen::Vector2f px;
-    for (int i=0;i<3;i++) {
-        px[0] = msg->data[i*2];
-        px[1] = msg->data[i*2+1];
-        transform_pixels_l.row(i)= px;
-    }
-    for (int i=0;i<3;i++) {
-        px[0] = msg->data[6+i*2];
-        px[1] = msg->data[6+i*2+1];
-        transform_pixels_r.row(i) = px;
+    Eigen::Vector3f px;
+    for (int i=0;i<2;i++) {
+        px[0] = msg->data[i*6];
+        px[1] = msg->data[i*6+1];
+        px[2] = msg->data[i*6+2];
+        transform_pixels_l.col(i)= px;
+        px[0] = msg->data[i*6+3];
+        px[1] = msg->data[i*6+4];
+        px[2] = msg->data[i*6+5];
+        transform_pixels_r.col(i)= px;
     }
     calibrate_transform = true;
+    ROS_INFO_STREAM("calibrating camera transforms");
 }
 
 int main(int argc, char **argv) {
@@ -255,11 +263,12 @@ int main(int argc, char **argv) {
     std::vector<sl::Timestamp> last_images_ts(nb_detected_zed); // images timestamps
     std::vector<Eigen::Matrix3f> px_points(nb_detected_zed); // images timestamps
     std::vector<Eigen::MatrixXf> pixels(nb_detected_zed); // images timestamps
+    std::vector<std::mutex> mtx(nb_detected_zed); // images timestamps
 
     for (int z = 0; z < nb_detected_zed; z++)
         if (zeds[z].isOpened()) {
             // camera acquisition thread
-            thread_pool[z] = std::thread(zed_acquisition, z,std::ref(zeds[z]), joint_pubs[z], img_pubs[z], depth_pubs[z],cam_poses[z], std::ref(run), std::ref(images_ts[z]),std::ref(pixels[z]),std::ref(px_points[z]));
+            thread_pool[z] = std::thread(zed_acquisition, z,std::ref(zeds[z]), joint_pubs[z], img_pubs[z], depth_pubs[z],cam_poses[z], std::ref(run), std::ref(images_ts[z]),std::ref(pixels[z]),std::ref(px_points[z]),std::ref(mtx[z]));
         }
     bool calibrating = false;
     Eigen::Vector3f x_axis;
@@ -274,9 +283,9 @@ int main(int argc, char **argv) {
     std::vector<Eigen::Isometry3f> transforms_fixed_to_right_cam;
     Eigen::Isometry3f transform_fixed_to_new = Eigen::Isometry3f::Identity();
     Eigen::Matrix3f rz;
-    rz = Eigen::Quaternionf(0.707,0,0,0.707);
-    transform_fixed_to_new.linear() = Eigen::Matrix3f(Eigen::Quaternionf(0.707,0,0,0.707));
-    transform_fixed_to_new.translation() = Eigen::Vector3f(35,3,0)*0.0254;
+    // rz = Eigen::Quaternionf(0,0,0,1);
+    // transform_fixed_to_new.linear() = Eigen::Matrix3f(Eigen::Quaternionf(0,0,0,1));
+    transform_fixed_to_new.translation() = Eigen::Vector3f(-15,-17,0)*0.0254;
     while (ros::ok()) {
 
         if (calibrate_transform) {
@@ -284,9 +293,18 @@ int main(int argc, char **argv) {
             pixels[r_cam_id] = transform_pixels_r;
 
             if ((images_ts[l_cam_id]>last_images_ts[l_cam_id]) && (images_ts[r_cam_id]>last_images_ts[r_cam_id])) {
-                x_axis = px_points[l_cam_id].col(1)-px_points[l_cam_id].col(0);
+                mtx[l_cam_id].lock();
+                Eigen::Matrix3f px_points_l = px_points[l_cam_id];
+                mtx[l_cam_id].unlock();
+                mtx[r_cam_id].lock();
+                Eigen::Matrix3f px_points_r = px_points[r_cam_id];
+                mtx[r_cam_id].unlock();
+
+                x_axis = px_points_l.col(1)-px_points_l.col(0);
+                if (x_axis.norm()<0.05) continue;
                 x_axis = x_axis.normalized();
-                z_axis = x_axis.cross(px_points[l_cam_id].col(2)-px_points[l_cam_id].col(0));
+                z_axis = x_axis.cross(px_points_l.col(2)-px_points_l.col(0));
+                if (z_axis.norm()<0.05) continue;
                 z_axis = z_axis.normalized();
                 y_axis = z_axis.cross(x_axis);
                 y_axis = y_axis.normalized();
@@ -295,10 +313,12 @@ int main(int argc, char **argv) {
                 rotation_part.col(2) = z_axis;
                 Eigen::Isometry3f transform_L = Eigen::Isometry3f::Identity();
                 transform_L.linear() = rotation_part;
-                transform_L.translation() = px_points[l_cam_id].col(0);
-                x_axis = px_points[r_cam_id].col(1)-px_points[r_cam_id].col(0);
+                transform_L.translation() = px_points_l.col(0);
+                x_axis = px_points_r.col(1)-px_points_r.col(0);
+                if (x_axis.norm()<0.05) continue;
                 x_axis = x_axis.normalized();
-                z_axis = x_axis.cross(px_points[r_cam_id].col(2)-px_points[r_cam_id].col(0));
+                z_axis = x_axis.cross(px_points_r.col(2)-px_points_r.col(0));
+                if (z_axis.norm()<0.05) continue;
                 z_axis = z_axis.normalized();
                 y_axis = z_axis.cross(x_axis);
                 y_axis = y_axis.normalized();
@@ -307,25 +327,48 @@ int main(int argc, char **argv) {
                 rotation_part.col(2) = z_axis;
                 Eigen::Isometry3f transform_R = Eigen::Isometry3f::Identity();
                 transform_R.linear() = rotation_part;
-                transform_R.translation() = px_points[r_cam_id].col(0);
+                transform_R.translation() = px_points_r.col(0);
                 transform_new_to_right_cam = transform_R.inverse();
                 transform_new_to_left_cam = transform_L.inverse();
                 transform_right_to_left_cam = transform_R*transform_new_to_left_cam;
+                std::cout<<"transform right to left cam\n:";
+                std::cout<<transform_right_to_left_cam.matrix()<<std::endl;
                 transforms_right_to_left_cam.push_back(transform_right_to_left_cam);
                 transform_fixed_to_right_cam = transform_fixed_to_new*transform_new_to_right_cam;
                 transforms_fixed_to_right_cam.push_back(transform_fixed_to_right_cam);
+                std::cout<<"transform fixed to right cam\n:";
+                std::cout<<transform_fixed_to_right_cam.matrix()<<std::endl;
 
 
                 last_images_ts[l_cam_id] = images_ts[l_cam_id];
                 last_images_ts[r_cam_id] = images_ts[r_cam_id];
-
+                std::cout<<"summation size:"<<transforms_fixed_to_right_cam.size()<<std::endl;
                 if (int(transforms_fixed_to_right_cam.size())>999) {
                     Eigen::Matrix4f transform_sums;
                     for (int i=0;i<1000;i++) {
                         transform_sums+=transforms_fixed_to_right_cam[i].matrix();
+                        std::cout<<"max coeff:"<<transforms_fixed_to_right_cam[i].matrix().maxCoeff()<<std::endl;
                     }
                     transform_fixed_to_right_cam = transform_sums*(1.0/1000);
+                    std::cout<<"mean transform fixed to right cam\n:";
                     std::cout<<transform_fixed_to_right_cam.matrix()<<std::endl;
+
+                    std::string path = ros::package::getPath("zed_skeleton_tracking");
+                    std::cout<<path<<std::endl;
+                    std::cin.ignore();
+                    // file pointer
+                    std::ofstream myFile(path+"/src/T_fixed_c1.csv");
+                
+                    // opens an existing csv file or creates a new file.
+                    Eigen::MatrixXf tf = transform_fixed_to_right_cam.matrix();
+                    for (int i=0;i<4;i++) {
+                        for (int j=0;j<4;j++) {
+                            myFile<<tf(i,j);
+                            if (j<4) myFile<<",";
+                        }
+                        if (i<4) myFile<<"\n";
+                    }
+                    myFile.close();
                     break;
                 }
             }

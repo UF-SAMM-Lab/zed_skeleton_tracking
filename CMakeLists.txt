@@ -9,6 +9,7 @@ find_package(catkin REQUIRED COMPONENTS
   roscpp
   std_msgs
   sensor_msgs
+  roslib
 )
 
 function(checkPackage package customMessage)
@@ -47,7 +48,7 @@ find_package(Eigen3 REQUIRED)
 catkin_package(
   INCLUDE_DIRS 
   LIBRARIES 
-  CATKIN_DEPENDS roscpp std_msgs sensor_msgs
+  CATKIN_DEPENDS roscpp std_msgs sensor_msgs roslib
   DEPENDS
     ZED
     CUDA
