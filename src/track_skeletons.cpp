@@ -23,19 +23,20 @@ void zed_acquisition(int id, sl::Camera& zed, ros::Publisher joint_pub, ros::Pub
 
     sl::Resolution pc_resolution(std::min((int)camera_config.resolution.width, 720), std::min((int)camera_config.resolution.height, 404));
 	// auto camera_parameters = zed.getCameraInformation(pc_resolution).camera_configuration.calibration_parameters.left_cam;
-	sl::Mat point_cloud(pc_resolution, sl::MAT_TYPE::F32_C4, sl::MEM::GPU);
+	// sl::Mat point_cloud(pc_resolution, sl::MAT_TYPE::F32_C4, sl::MEM::GPU);
 
-    sl::Resolution display_resolution(std::min((int)camera_config.resolution.width, 1280), std::min((int)camera_config.resolution.height, 720));
+    sl::Resolution display_resolution(std::min((int)camera_config.resolution.width, 640), std::min((int)camera_config.resolution.height, 360));
+    sl::Mat image;
 
-
-    cv::Mat image_left_ocv(display_resolution.height, display_resolution.width, CV_8UC4, 1);
-    sl::Mat image_left(display_resolution, sl::MAT_TYPE::U8_C4, image_left_ocv.data, image_left_ocv.step);
+    // cv::Mat image_left_ocv(display_resolution.height, display_resolution.width, CV_8UC4, 1);
+    sl::Mat image_left(display_resolution, sl::MAT_TYPE::U8_C4);//, image_left_ocv.data, image_left_ocv.step);
 
     // Configure object detection runtime parameters
     sl::ObjectDetectionRuntimeParameters objectTracker_parameters_rt;
     objectTracker_parameters_rt.detection_confidence_threshold = 40;
 
     std_msgs::Float32MultiArray joints_vec_msg;
+    sensor_msgs::CompressedImage img_msg;
 
     sl::Objects bodies;
 
@@ -54,7 +55,7 @@ void zed_acquisition(int id, sl::Camera& zed, ros::Publisher joint_pub, ros::Pub
             zed.retrieveObjects(bodies, objectTracker_parameters_rt);
             joints_vec_msg.data.clear();
             // std::cout<<"camera "<<id<<" body count:"<<bodies.object_list.size()<<" at time "<<ts.getMilliseconds()-start_time<<std::endl;
-            for(int o=0;o<bodies.object_list.size();o++) {
+            for(int o=0;o<std::min(1,int(bodies.object_list.size()));o++) {
                 // std::cout<<"body:"<<o<<std::endl;
                 for (auto& kp_3d:bodies.object_list[o].keypoint) {
                     // std::cout<<kp_3d<<std::endl;
@@ -66,7 +67,11 @@ void zed_acquisition(int id, sl::Camera& zed, ros::Publisher joint_pub, ros::Pub
                 // std::cout<<joints_vec_msg<<std::endl;
             }
             if (!joints_vec_msg.data.empty()) joint_pub.publish(joints_vec_msg);
-            zed.retrieveImage(image_left, sl::VIEW::LEFT, sl::MEM::CPU, display_resolution);
+            zed.retrieveImage(image_left, sl::VIEW::LEFT, sl::MEM::CPU, display_resolution);  
+            // zed.retrieveImage(image, sl::VIEW::LEFT);            
+            img_msg.format = "jpeg";
+            cv::imencode(".jpg", cv::Mat(display_resolution.height,display_resolution.width, CV_8UC4,image_left.getPtr<sl::uchar1>(sl::MEM::CPU)), img_msg.data);
+            img_pub.publish(img_msg);
             //put image_left into sensor_msgs/compressed image
             
 			// zed.retrieveMeasure(point_cloud, sl::MEASURE::XYZRGBA, sl::MEM::GPU, pc_resolution);
@@ -79,7 +84,8 @@ void zed_acquisition(int id, sl::Camera& zed, ros::Publisher joint_pub, ros::Pub
     
     // Release objects
 	image_left.free();
-    point_cloud.free();
+	// image.free();
+    // point_cloud.free();
     floor_plane.clear();
     bodies.object_list.clear();
 

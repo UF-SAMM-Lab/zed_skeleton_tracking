@@ -335,6 +335,7 @@ int main(int argc, char **argv) {
                 std::cout<<transform_right_to_left_cam.matrix()<<std::endl;
                 transforms_right_to_left_cam.push_back(transform_right_to_left_cam);
                 transform_fixed_to_right_cam = transform_fixed_to_new*transform_new_to_right_cam;
+                if (transform_fixed_to_right_cam.matrix().array().isNaN().any()) continue;
                 transforms_fixed_to_right_cam.push_back(transform_fixed_to_right_cam);
                 std::cout<<"transform fixed to right cam\n:";
                 std::cout<<transform_fixed_to_right_cam.matrix()<<std::endl;
@@ -347,11 +348,11 @@ int main(int argc, char **argv) {
                     Eigen::Matrix4f transform_sums;
                     for (int i=0;i<1000;i++) {
                         transform_sums+=transforms_fixed_to_right_cam[i].matrix();
-                        std::cout<<"max coeff:"<<transforms_fixed_to_right_cam[i].matrix().maxCoeff()<<std::endl;
                     }
                     transform_fixed_to_right_cam = transform_sums*(1.0/1000);
                     std::cout<<"mean transform fixed to right cam\n:";
                     std::cout<<transform_fixed_to_right_cam.matrix()<<std::endl;
+                    std::cout<<transform_fixed_to_right_cam.matrix().col(0).norm()<<","<<transform_fixed_to_right_cam.matrix().col(1).norm()<<","<<transform_fixed_to_right_cam.matrix().col(2).norm()<<std::endl;
 
                     std::string path = ros::package::getPath("zed_skeleton_tracking");
                     std::cout<<path<<std::endl;
@@ -376,7 +377,7 @@ int main(int argc, char **argv) {
         }
 
 
-        ros::Duration(0.1).sleep();
+        ros::Duration(0.02).sleep();
 
     }
 
