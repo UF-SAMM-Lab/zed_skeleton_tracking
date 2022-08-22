@@ -7,6 +7,7 @@
     #include <opencv2/opencv.hpp>
     #include <sensor_msgs/CompressedImage.h>
     #include <sensor_msgs/Image.h>
+    #include <zed_skeleton_tracking/TrackingViewer.hpp>
 
 void zed_acquisition(int id, sl::Camera& zed, ros::Publisher joint_pub, ros::Publisher img_pub,ros::Publisher depth_pub,sl::Pose cam_pose, bool& run, sl::Timestamp& ts) {
 
@@ -38,10 +39,10 @@ void zed_acquisition(int id, sl::Camera& zed, ros::Publisher joint_pub, ros::Pub
     std_msgs::Float32MultiArray joints_vec_msg;
     sensor_msgs::CompressedImage img_msg;
 
-    sl::Objects bodies;
+    sl::Objects bodies;  
 
     double start_time = zed.getTimestamp(sl::TIME_REFERENCE::IMAGE).getMilliseconds();
-
+    sl::float2 img_scale(display_resolution.width / (float)camera_config.resolution.width, display_resolution.height / (float) camera_config.resolution.height);
     while (run) {
         // grab current images and compute depth
         if (zed.grab() == sl::ERROR_CODE::SUCCESS) {
@@ -68,9 +69,11 @@ void zed_acquisition(int id, sl::Camera& zed, ros::Publisher joint_pub, ros::Pub
             }
             if (!joints_vec_msg.data.empty()) joint_pub.publish(joints_vec_msg);
             zed.retrieveImage(image_left, sl::VIEW::LEFT, sl::MEM::CPU, display_resolution);  
+            cv::Mat img_left_cv_mat(display_resolution.height,display_resolution.width, CV_8UC4,image_left.getPtr<sl::uchar1>(sl::MEM::CPU));
+            render_2D(img_left_cv_mat, img_scale, bodies.object_list, true, sl::BODY_FORMAT::POSE_18);
             // zed.retrieveImage(image, sl::VIEW::LEFT);            
             img_msg.format = "jpeg";
-            cv::imencode(".jpg", cv::Mat(display_resolution.height,display_resolution.width, CV_8UC4,image_left.getPtr<sl::uchar1>(sl::MEM::CPU)), img_msg.data);
+            cv::imencode(".jpg", img_left_cv_mat, img_msg.data);
             img_pub.publish(img_msg);
             //put image_left into sensor_msgs/compressed image
             

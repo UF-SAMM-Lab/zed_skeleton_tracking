@@ -47,7 +47,8 @@ find_package(Eigen3 REQUIRED)
 
 catkin_package(
   INCLUDE_DIRS 
-  LIBRARIES 
+    include
+  LIBRARIES zed_skeleton_tracking
   CATKIN_DEPENDS roscpp std_msgs sensor_msgs roslib
   DEPENDS
     ZED
@@ -55,14 +56,40 @@ catkin_package(
     OpenCV
     EIGEN3
 )
+
 set(INCLUDE_DIRS
+  include
   ${catkin_INCLUDE_DIRS}
   ${CUDA_INCLUDE_DIRS}
   ${ZED_INCLUDE_DIRS}
   ${OpenCV_INCLUDE_DIRS}
   ${EIGEN3_INCLUDE_DIRS}
 )
+
 set(LINK_LIBRARIES
+  ${catkin_LIBRARIES}
+  ${ZED_LIBRARIES}
+  ${CUDA_LIBRARIES}
+  ${OpenCV_LIBRARIES}
+  ${EIGEN3_LIBRARIES}
+  stdc++fs
+)
+
+include_directories(
+  ${INCLUDE_DIRS}
+)
+
+add_library(${PROJECT_NAME}
+  src/${PROJECT_NAME}/TrackingViewer.cpp
+)
+add_dependencies(${PROJECT_NAME} ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
+
+target_link_libraries(${PROJECT_NAME}
+  ${LINK_LIBRARIES}
+)
+
+set(LINK_LIBRARIES
+  ${PROJECT_NAME} 
   ${catkin_LIBRARIES}
   ${ZED_LIBRARIES}
   ${CUDA_LIBRARIES}
