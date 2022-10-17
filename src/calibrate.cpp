@@ -333,9 +333,12 @@ int main(int argc, char **argv) {
                 transform_right_to_left_cam = transform_R*transform_new_to_left_cam;
                 std::cout<<"transform right to left cam\n:";
                 std::cout<<transform_right_to_left_cam.matrix()<<std::endl;
+                if (transform_right_to_left_cam.matrix().array().isNaN().any()) continue;
+                if ((transform_right_to_left_cam.matrix().array().abs()>5).any()) continue;
                 transforms_right_to_left_cam.push_back(transform_right_to_left_cam);
                 transform_fixed_to_right_cam = transform_fixed_to_new*transform_new_to_right_cam;
                 if (transform_fixed_to_right_cam.matrix().array().isNaN().any()) continue;
+                if ((transform_fixed_to_right_cam.matrix().array().abs()>5).any()) continue;
                 transforms_fixed_to_right_cam.push_back(transform_fixed_to_right_cam);
                 std::cout<<"transform fixed to right cam\n:";
                 std::cout<<transform_fixed_to_right_cam.matrix()<<std::endl;
@@ -346,22 +349,45 @@ int main(int argc, char **argv) {
                 std::cout<<"summation size:"<<transforms_fixed_to_right_cam.size()<<std::endl;
                 if (int(transforms_fixed_to_right_cam.size())>999) {
                     Eigen::Matrix4f transform_sums;
+                    transform_sums.setZero();
+                    Eigen::Matrix4f transform_sums2;
+                    transform_sums2.setZero();
                     for (int i=0;i<1000;i++) {
                         transform_sums+=transforms_fixed_to_right_cam[i].matrix();
+                        transform_sums2+=transforms_right_to_left_cam[i].matrix();
                     }
                     transform_fixed_to_right_cam = transform_sums*(1.0/1000);
+                    transform_right_to_left_cam = transform_sums2*(1.0/1000);
                     std::cout<<"mean transform fixed to right cam\n:";
                     std::cout<<transform_fixed_to_right_cam.matrix()<<std::endl;
                     std::cout<<transform_fixed_to_right_cam.matrix().col(0).norm()<<","<<transform_fixed_to_right_cam.matrix().col(1).norm()<<","<<transform_fixed_to_right_cam.matrix().col(2).norm()<<std::endl;
 
+                    std::cout<<"mean transform right to left cam\n:";
+                    std::cout<<transform_right_to_left_cam.matrix()<<std::endl;
+                    std::cout<<transform_right_to_left_cam.matrix().col(0).norm()<<","<<transform_right_to_left_cam.matrix().col(1).norm()<<","<<transform_right_to_left_cam.matrix().col(2).norm()<<std::endl;
+
                     std::string path = ros::package::getPath("zed_skeleton_tracking");
                     std::cout<<path<<std::endl;
+                    std::cout<<"press enter to save the transformation\n";
                     std::cin.ignore();
                     // file pointer
                     std::ofstream myFile(path+"/src/T_fixed_c1.csv");
                 
                     // opens an existing csv file or creates a new file.
                     Eigen::MatrixXf tf = transform_fixed_to_right_cam.matrix();
+                    for (int i=0;i<4;i++) {
+                        for (int j=0;j<4;j++) {
+                            myFile<<tf(i,j);
+                            if (j<4) myFile<<",";
+                        }
+                        if (i<4) myFile<<"\n";
+                    }
+                    myFile.close();
+
+                    myFile = std::ofstream(path+"/src/T_c1_c2.csv");
+                
+                    // opens an existing csv file or creates a new file.
+                    tf = transform_right_to_left_cam.matrix();
                     for (int i=0;i<4;i++) {
                         for (int j=0;j<4;j++) {
                             myFile<<tf(i,j);
