@@ -58,12 +58,13 @@ void zed_acquisition(int id, sl::Camera& zed, ros::Publisher joint_pub, ros::Pub
             // std::cout<<"camera "<<id<<" body count:"<<bodies.object_list.size()<<" at time "<<ts.getMilliseconds()-start_time<<std::endl;
             for(int o=0;o<std::min(1,int(bodies.object_list.size()));o++) {
                 // std::cout<<"body:"<<o<<std::endl;
+                if (bodies.object_list[o].keypoint[0][2]<-3.0) continue;
                 for (auto& kp_3d:bodies.object_list[o].keypoint) {
                     // std::cout<<kp_3d<<std::endl;
                     for (int i=0;i<3;i++) {
                         joints_vec_msg.data.push_back(kp_3d[i]);
                     }
-                    joints_vec_msg.data.push_back(1.0);
+                    joints_vec_msg.data.push_back(1.0); //confidence
                 }
                 // std::cout<<joints_vec_msg<<std::endl;
             }

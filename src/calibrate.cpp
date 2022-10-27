@@ -15,7 +15,7 @@ Eigen::MatrixXf transform_pixels_l(3,2);
 Eigen::MatrixXf transform_pixels_r(3,2);
 bool calibrate_transform = false;
 
-void zed_acquisition(int id, sl::Camera& zed, ros::Publisher joint_pub, ros::Publisher img_pub,ros::Publisher depth_pub,sl::Pose cam_pose, bool& run, sl::Timestamp& ts, Eigen::MatrixXf& pixel, Eigen::Matrix3f& points3D, std::mutex& mtx) {
+void zed_acquisition(int id, sl::Camera& zed, ros::Publisher joint_pub, ros::Publisher img_pub,ros::Publisher depth_pub,sl::Pose cam_pose, bool& run, sl::Timestamp& ts, Eigen::MatrixXf& pixel, Eigen::Matrix3f& points3D, std::mutex& mtx, std::vector<double>& depths) {
 
     
     sl::Plane floor_plane; // floor plane handle
@@ -84,10 +84,12 @@ void zed_acquisition(int id, sl::Camera& zed, ros::Publisher joint_pub, ros::Pub
             zed.retrieveMeasure(depth_map,sl::MEASURE::DEPTH);
             zed.retrieveMeasure(point_cloud, sl::MEASURE::XYZRGBA); 
             mtx.lock();
+            depths.clear();
             for (int i=0;i<pixel.rows();i++) {
                 sl::float4 point3D;
                 float depth_value=0;
                 depth_map.getValue(pixel(i,0),pixel(i,1),&depth_value);
+                depths.push_back(depth_value);
                 // std::cout<<"cam:"<<id<<"px:"<<pixel.row(i)<<", depth:"<<depth_value<<std::endl;
                 point_cloud.getValue(pixel(i,0),pixel(i,1),&point3D);
                 points3D.col(i) = Eigen::Vector3f(point3D.x,point3D.y,point3D.z);
@@ -263,12 +265,13 @@ int main(int argc, char **argv) {
     std::vector<sl::Timestamp> last_images_ts(nb_detected_zed); // images timestamps
     std::vector<Eigen::Matrix3f> px_points(nb_detected_zed); // images timestamps
     std::vector<Eigen::MatrixXf> pixels(nb_detected_zed); // images timestamps
+    std::vector<std::vector<double>> depths(nb_detected_zed); // images timestamps
     std::vector<std::mutex> mtx(nb_detected_zed); // images timestamps
 
     for (int z = 0; z < nb_detected_zed; z++)
         if (zeds[z].isOpened()) {
             // camera acquisition thread
-            thread_pool[z] = std::thread(zed_acquisition, z,std::ref(zeds[z]), joint_pubs[z], img_pubs[z], depth_pubs[z],cam_poses[z], std::ref(run), std::ref(images_ts[z]),std::ref(pixels[z]),std::ref(px_points[z]),std::ref(mtx[z]));
+            thread_pool[z] = std::thread(zed_acquisition, z,std::ref(zeds[z]), joint_pubs[z], img_pubs[z], depth_pubs[z],cam_poses[z], std::ref(run), std::ref(images_ts[z]),std::ref(pixels[z]),std::ref(px_points[z]),std::ref(mtx[z]),std::ref(depths[z]));
         }
     bool calibrating = false;
     Eigen::Vector3f x_axis;
@@ -286,6 +289,10 @@ int main(int argc, char **argv) {
     // rz = Eigen::Quaternionf(0,0,0,1);
     // transform_fixed_to_new.linear() = Eigen::Matrix3f(Eigen::Quaternionf(0,0,0,1));
     transform_fixed_to_new.translation() = Eigen::Vector3f(-15,-17,0)*0.0254;
+
+    std::ofstream outfile;
+    outfile.open("calibration_data.csv");
+    outfile<<"p_l_0_depth,p_l_1_depth,p_l_2_depth,p_r_0_depth,p_r_1_depth,p_r_2_depth,p_l_0[x],p_l_0[y],p_l_0[z],p_l_1[x],p_l_1[y],p_l_1[z],p_l_2[x],p_l_2[y],p_l_2[z],p_r_0[x],p_r_0[y],p_r_0[z],p_r_1[x],p_r_1[y],p_r_1[z],p_r_2[x],p_r_2[y],p_r_2[z],t_r_l(0,0),t_r_l(1,0),t_r_l(2,0),t_r_l(3,0),t_r_l(0,1),t_r_l(1,1),t_r_l(2,1),t_r_l(3,1),t_r_l(0,2),t_r_l(1,2),t_r_l(2,2),t_r_l(3,2),t_r_l(0,3),t_r_l(1,3),t_r_l(2,3),t_r_l(3,3),\n";
     while (ros::ok()) {
 
         if (calibrate_transform) {
@@ -293,13 +300,23 @@ int main(int argc, char **argv) {
             pixels[r_cam_id] = transform_pixels_r;
 
             if ((images_ts[l_cam_id]>last_images_ts[l_cam_id]) && (images_ts[r_cam_id]>last_images_ts[r_cam_id])) {
+                std::vector<double> out_data;
                 mtx[l_cam_id].lock();
                 Eigen::Matrix3f px_points_l = px_points[l_cam_id];
+                std::vector<double> l_depths = depths[l_cam_id];
                 mtx[l_cam_id].unlock();
                 mtx[r_cam_id].lock();
                 Eigen::Matrix3f px_points_r = px_points[r_cam_id];
+                std::vector<double> r_depths = depths[r_cam_id];
                 mtx[r_cam_id].unlock();
-
+                for (int i=0;i<l_depths.size();i++) out_data.push_back(l_depths[i]);
+                for (int i=0;i<r_depths.size();i++) out_data.push_back(r_depths[i]);
+                for (int j=0;j<px_points_l.cols();j++) {
+                    for (int i=0;i<3;i++) out_data.push_back(px_points_l(i,j));
+                }
+                for (int j=0;j<px_points_r.cols();j++) {
+                    for (int i=0;i<3;i++) out_data.push_back(px_points_r(i,j));
+                }
                 x_axis = px_points_l.col(1)-px_points_l.col(0);
                 if (x_axis.norm()<0.05) continue;
                 x_axis = x_axis.normalized();
@@ -340,6 +357,17 @@ int main(int argc, char **argv) {
                 if (transform_fixed_to_right_cam.matrix().array().isNaN().any()) continue;
                 if ((transform_fixed_to_right_cam.matrix().array().abs()>5).any()) continue;
                 transforms_fixed_to_right_cam.push_back(transform_fixed_to_right_cam);
+
+                for (int j=0;j<4;j++) {
+                    for (int i=0;i<4;i++) out_data.push_back(transform_right_to_left_cam.matrix()(i,j));
+                }
+                for (int j=0;j<4;j++) {
+                    for (int i=0;i<4;i++) out_data.push_back(transform_fixed_to_right_cam.matrix()(i,j));
+                }
+                for (int i=0;i<out_data.size();i++) {
+                    outfile<<std::to_string(out_data[i])<<",";
+                }
+                outfile<<"\n";
                 std::cout<<"transform fixed to right cam\n:";
                 std::cout<<transform_fixed_to_right_cam.matrix()<<std::endl;
 
@@ -406,7 +434,7 @@ int main(int argc, char **argv) {
         ros::Duration(0.02).sleep();
 
     }
-
+    outfile.close();
     // stop all running threads
     run = false;
 
