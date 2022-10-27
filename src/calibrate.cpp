@@ -291,7 +291,8 @@ int main(int argc, char **argv) {
     transform_fixed_to_new.translation() = Eigen::Vector3f(-15,-17,0)*0.0254;
 
     std::ofstream outfile;
-    outfile.open("calibration_data.csv");
+    std::string path = ros::package::getPath("zed_skeleton_tracking");
+    outfile.open(path+"/src/calibration_data.csv");
     outfile<<"p_l_0_depth,p_l_1_depth,p_l_2_depth,p_r_0_depth,p_r_1_depth,p_r_2_depth,p_l_0[x],p_l_0[y],p_l_0[z],p_l_1[x],p_l_1[y],p_l_1[z],p_l_2[x],p_l_2[y],p_l_2[z],p_r_0[x],p_r_0[y],p_r_0[z],p_r_1[x],p_r_1[y],p_r_1[z],p_r_2[x],p_r_2[y],p_r_2[z],t_r_l(0,0),t_r_l(1,0),t_r_l(2,0),t_r_l(3,0),t_r_l(0,1),t_r_l(1,1),t_r_l(2,1),t_r_l(3,1),t_r_l(0,2),t_r_l(1,2),t_r_l(2,2),t_r_l(3,2),t_r_l(0,3),t_r_l(1,3),t_r_l(2,3),t_r_l(3,3),\n";
     while (ros::ok()) {
 
@@ -394,7 +395,6 @@ int main(int argc, char **argv) {
                     std::cout<<transform_right_to_left_cam.matrix()<<std::endl;
                     std::cout<<transform_right_to_left_cam.matrix().col(0).norm()<<","<<transform_right_to_left_cam.matrix().col(1).norm()<<","<<transform_right_to_left_cam.matrix().col(2).norm()<<std::endl;
 
-                    std::string path = ros::package::getPath("zed_skeleton_tracking");
                     std::cout<<path<<std::endl;
                     std::cout<<"press enter to save the transformation\n";
                     std::cin.ignore();
