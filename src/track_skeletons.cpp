@@ -35,7 +35,7 @@ void zed_acquisition(int id, sl::Camera& zed, ros::Publisher joint_pub, ros::Pub
 
     // Configure object detection runtime parameters
     sl::ObjectDetectionRuntimeParameters objectTracker_parameters_rt;
-    objectTracker_parameters_rt.detection_confidence_threshold = 40;
+    objectTracker_parameters_rt.detection_confidence_threshold = 20;
 
     std_msgs::Float32MultiArray joints_vec_msg;
     sensor_msgs::CompressedImage img_msg;
