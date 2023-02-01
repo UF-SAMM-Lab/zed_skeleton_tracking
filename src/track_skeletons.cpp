@@ -10,7 +10,7 @@
     #include <zed_skeleton_tracking/TrackingViewer.hpp>
     #include <math.h>
 
-void zed_acquisition(int id, sl::Camera& zed, ros::Publisher joint_pub, ros::Publisher img_pub,ros::Publisher depth_pub,sl::Pose cam_pose, bool& run, sl::Timestamp& ts) {
+void zed_acquisition(int id, sl::Camera& zed, ros::Publisher joint_pub, ros::Publisher img_pub,ros::Publisher depth_pub,sl::Pose cam_pose, bool& run, sl::Timestamp& ts, double dist_lim) {
 
     
     sl::Plane floor_plane; // floor plane handle
@@ -46,6 +46,7 @@ void zed_acquisition(int id, sl::Camera& zed, ros::Publisher joint_pub, ros::Pub
 
     double start_time = zed.getTimestamp(sl::TIME_REFERENCE::IMAGE).getMilliseconds();
     sl::float2 img_scale(display_resolution.width / (float)camera_config.resolution.width, display_resolution.height / (float) camera_config.resolution.height);
+    
     while (run) {
         // grab current images and compute depth
         if (zed.grab() == sl::ERROR_CODE::SUCCESS) {
@@ -54,7 +55,7 @@ void zed_acquisition(int id, sl::Camera& zed, ros::Publisher joint_pub, ros::Pub
                     need_floor_plane = false;
                 }
             }
-            
+            std::vector<sl::ObjectData> bods;
             // Retrieve Detected Human Bodies
             zed.retrieveObjects(bodies, objectTracker_parameters_rt);
             zed.retrieveMeasure(depth_map,sl::MEASURE::DEPTH);
@@ -62,16 +63,22 @@ void zed_acquisition(int id, sl::Camera& zed, ros::Publisher joint_pub, ros::Pub
 
             joints_vec_msg.data.clear();
             // std::cout<<"camera "<<id<<" body count:"<<bodies.object_list.size()<<" at time "<<ts.getMilliseconds()-start_time<<std::endl;
-            for(int o=0;o<std::min(1,int(bodies.object_list.size()));o++) {
+            for(int o=0;o<int(bodies.object_list.size());o++) {
                 // std::cout<<"body:"<<o<<std::endl;
-                if ((bodies.object_list[o].keypoint[0][2]*bodies.object_list[o].keypoint[0][2]+bodies.object_list[o].keypoint[0][0]*bodies.object_list[o].keypoint[0][0])>9) continue;
+                bool skip_bod = false;
+                std::vector<float> data;
                 for (int j=0;j<int(bodies.object_list[o].keypoint.size());j++) {
                 // for (auto& kp_3d:bodies.object_list[o].keypoint) {
                     // std::cout<<kp_3d<<std::endl;
                     sl::float3 kp_3d = bodies.object_list[o].keypoint[j];
+                    // std::cout<<o<<":"<<kp_3d[0]*kp_3d[0]+kp_3d[1]*kp_3d[1]+kp_3d[2]*kp_3d[2]<<std::endl;
+                    if (kp_3d[0]*kp_3d[0]+kp_3d[1]*kp_3d[1]+kp_3d[2]*kp_3d[2]>dist_lim) {
+                        skip_bod = true;
+                        break;
+                    }
                     // std::cout<<bodies.object_list[o].keypoint_confidence[j]<<std::endl;
                     for (int i=0;i<3;i++) {
-                        joints_vec_msg.data.push_back(kp_3d[i]);
+                        data.push_back(kp_3d[i]);
                     }
                     float depth_changes = 1.0;
                     if (j==0) {
@@ -275,14 +282,18 @@ void zed_acquisition(int id, sl::Camera& zed, ros::Publisher joint_pub, ros::Pub
                     //     // std::cout<<"confidence of "<<j<<":"<<depth_changes<<","<<isfinite(depth_changes)<<std::endl;
                     // }
                     if (isnan(depth_changes)) depth_changes=1000;
-                    joints_vec_msg.data.push_back(depth_changes); //confidence
+                    data.push_back(depth_changes); //confidence
+                }
+                if (!skip_bod) {
+                    bods.push_back(bodies.object_list[o]);
+                    joints_vec_msg.data = data;
                 }
                 // std::cout<<joints_vec_msg<<std::endl;
             }
             if (!joints_vec_msg.data.empty()) joint_pub.publish(joints_vec_msg);
             zed.retrieveImage(image_left, sl::VIEW::LEFT, sl::MEM::CPU, display_resolution);  
             cv::Mat img_left_cv_mat(display_resolution.height,display_resolution.width, CV_8UC4,image_left.getPtr<sl::uchar1>(sl::MEM::CPU));
-            render_2D(img_left_cv_mat, img_scale, bodies.object_list, true, sl::BODY_FORMAT::POSE_18);
+            render_2D(img_left_cv_mat, img_scale, bods, true, sl::BODY_FORMAT::POSE_18);
             // zed.retrieveImage(image, sl::VIEW::LEFT);            
             img_msg.format = "jpeg";
             cv::imencode(".jpg", img_left_cv_mat, img_msg.data);
@@ -357,6 +368,7 @@ int main(int argc, char **argv) {
     std::vector<ros::Publisher> img_pubs(nb_detected_zed);
     std::vector<ros::Publisher> depth_pubs(nb_detected_zed);
     std::string pub_topic_name;
+    std::vector<double> dist_lims(nb_detected_zed);
 	// bool quit = false;
 
     // try to open every detected cameras
@@ -370,6 +382,7 @@ int main(int argc, char **argv) {
         init_parameters.coordinate_units = sl::UNIT::METER;
         init_parameters.depth_minimum_distance = 0.5;
         sl::ERROR_CODE err = zeds[z].open(init_parameters);
+        dist_lims[z] = 0;
         if (err == sl::ERROR_CODE::SUCCESS) {
             auto cam_info = zeds[z].getCameraInformation();
             std::cout << cam_info.camera_model << ", ID: " << z << ", SN: " << cam_info.serial_number << " Opened" << std::endl;
@@ -398,10 +411,13 @@ int main(int argc, char **argv) {
             joint_pubs[z] = nh.advertise<std_msgs::Float32MultiArray>(pub_topic_name,0);
             if (cam_info.serial_number==29580072) {
                 pub_topic_name = "/cameraR/";
+                dist_lims[z] = 9;
             } else if (cam_info.serial_number==29191725) {
                 pub_topic_name = "/cameraL/";
+                dist_lims[z] = 16;
             } else {
                 pub_topic_name = "/cameras/"+std::to_string(z);
+                dist_lims[z] = 16;
             }
             img_pubs[z] = nh.advertise<sensor_msgs::CompressedImage>(pub_topic_name+"image_raw/compressed",0);
             depth_pubs[z] = nh.advertise<sensor_msgs::Image>(pub_topic_name+"depth_image",0);
@@ -422,7 +438,7 @@ int main(int argc, char **argv) {
             // create an image to store Left+Depth image
             images_lr[z] = cv::Mat(404, 720*2, CV_8UC4);
             // camera acquisition thread
-            thread_pool[z] = std::thread(zed_acquisition, z,std::ref(zeds[z]), joint_pubs[z], img_pubs[z], depth_pubs[z],cam_poses[z], std::ref(run), std::ref(images_ts[z]));
+            thread_pool[z] = std::thread(zed_acquisition, z,std::ref(zeds[z]), joint_pubs[z], img_pubs[z], depth_pubs[z],cam_poses[z], std::ref(run), std::ref(images_ts[z]),dist_lims[z]);
         }
 
     ros::waitForShutdown();
