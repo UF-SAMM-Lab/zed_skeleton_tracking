@@ -1,14 +1,55 @@
-    // ZED includes
-    #include <sl/Camera.hpp>
-    #include <ros/ros.h>
-    #include <std_msgs/Float32MultiArray.h>
-    #include <thread>
-    #include <string>
-    #include <opencv2/opencv.hpp>
-    #include <sensor_msgs/CompressedImage.h>
-    #include <sensor_msgs/Image.h>
-    #include <zed_skeleton_tracking/TrackingViewer.hpp>
-    #include <math.h>
+// ZED includes
+#include <sl/Camera.hpp>
+#include <ros/ros.h>
+#include <std_msgs/Float32MultiArray.h>
+#include <thread>
+#include <string>
+#include <opencv2/opencv.hpp>
+#include <sensor_msgs/CompressedImage.h>
+#include <sensor_msgs/Image.h>
+#include <zed_skeleton_tracking/TrackingViewer.hpp>
+#include <math.h>
+#include <Eigen/Dense>
+
+Eigen::Vector4d fit_depth_line(Eigen::VectorXd depths) {
+    std::vector<int> good_pts;
+    for (int i=0;i<depths.size();i++) good_pts.push_back(i);
+    double slope = 0;
+    double intercept = 0;
+    while (true) {
+        Eigen::ArrayXd x(depths.size());
+        for (int i=0;i<depths.size();i++) x[i] = i;
+        double x_bar = x.mean();
+        slope = ((depths.array()-depths.mean())*(x-x_bar)).sum()/((x-x_bar)*(x-x_bar)).sum();
+        intercept = depths[0]-slope*x[0];
+        Eigen::ArrayXd diffs(depths.size());
+        for (int i=0;i<depths.size();i++) {
+            diffs[i] = depths[i]-slope*double(i)-intercept;
+        }
+        double std_dev = 2*std::sqrt((diffs - diffs.mean()).square().sum()/(diffs.size()-1));
+        bool no_deviations = true;
+        for (int i=0;i<diffs.size();i++) {
+            if ((abs(diffs[i])>std_dev) || (isnan(depths[i]))) {
+                Eigen::VectorXd new_depths(depths.size()-1);
+                int k = 0;
+                for (int j=0;j<depths.size();j++) {
+                    if (j!=i) {
+                        new_depths[k] = depths[j];
+                        k++;
+                    }
+                }
+                depths = new_depths;
+                good_pts.erase(good_pts.begin()+i);
+                no_deviations = false;
+                break;
+            }
+        }
+        if ((no_deviations) || (depths.size()==2)) break;
+    }
+    Eigen::Vector4d params;
+    params << good_pts[0], slope, intercept, good_pts.size();
+    return params;
+}
 
 void zed_acquisition(int id, sl::Camera& zed, ros::Publisher joint_pub, ros::Publisher img_pub,ros::Publisher depth_pub,sl::Pose cam_pose, bool& run, sl::Timestamp& ts, double dist_lim) {
 
@@ -67,6 +108,7 @@ void zed_acquisition(int id, sl::Camera& zed, ros::Publisher joint_pub, ros::Pub
                 // std::cout<<"body:"<<o<<std::endl;
                 bool skip_bod = false;
                 std::vector<float> data;
+                std::vector<float> extra_data;
                 for (int j=0;j<int(bodies.object_list[o].keypoint.size());j++) {
                 // for (auto& kp_3d:bodies.object_list[o].keypoint) {
                     // std::cout<<kp_3d<<std::endl;
@@ -87,11 +129,13 @@ void zed_acquisition(int id, sl::Camera& zed, ros::Publisher joint_pub, ros::Pub
                         cv::LineIterator it(depth_img, cv::Point(int(p1[0]),int(p1[1])), cv::Point(int(p2[0]),int(p2[1])), 8);
                         depth_changes = 1.0;
                         if (it.count>0) {
+                            // Eigen::VectorXd depths(it.count);
                             depth_changes = 0;
                             float prev_depth = depth_img.at<float>(it.pos());
                             for(int i=0; i<it.count; i++)
                             {   
                                 float d = depth_img.at<float>(it.pos());
+                                // depths[i] = d;
                                 if (isfinite(d)) {
                                     if (!isfinite(prev_depth)) prev_depth = d;
                                     depth_changes+=abs(d-prev_depth);
@@ -107,11 +151,13 @@ void zed_acquisition(int id, sl::Camera& zed, ros::Publisher joint_pub, ros::Pub
                         cv::LineIterator it(depth_img, cv::Point(int(p1[0]),int(p1[1])), cv::Point(int(p2[0]),int(p2[1])), 8);
                         depth_changes = 1.0;
                         if (it.count>0) {
+                            Eigen::VectorXd depths(it.count);
                             depth_changes = 0;
                             float prev_depth = depth_img.at<float>(it.pos());
                             for(int i=0; i<it.count; i++)
                             {
                                 float d = depth_img.at<float>(it.pos());
+                                depths[i] = d;
                                 if (isfinite(d)) {
                                     if (!isfinite(prev_depth)) prev_depth = d;
                                     depth_changes+=abs(d-prev_depth);
@@ -119,15 +165,19 @@ void zed_acquisition(int id, sl::Camera& zed, ros::Publisher joint_pub, ros::Pub
                                 }
                                 it++;
                             }
+                            Eigen::VectorXd ln1 = fit_depth_line(depths);
+                            std::cout<<"line1:"<<depths.size()<<","<<ln1.transpose()<<std::endl;
                         }
                         p1 = bodies.object_list[o].keypoint_2d[1];
                         p2 = bodies.object_list[o].keypoint_2d[11];
                         it = cv::LineIterator(depth_img, cv::Point(int(p1[0]),int(p1[1])), cv::Point(int(p2[0]),int(p2[1])), 8);
                         if (it.count>0) {
+                            Eigen::VectorXd depths(it.count);
                             float prev_depth = depth_img.at<float>(it.pos());
                             for(int i=0; i<it.count; i++)
                             {
                                 float d = depth_img.at<float>(it.pos());
+                                depths[i] = d;
                                 if (isfinite(d)) {
                                     if (!isfinite(prev_depth)) prev_depth = d;
                                     depth_changes+=abs(d-prev_depth);
@@ -135,6 +185,9 @@ void zed_acquisition(int id, sl::Camera& zed, ros::Publisher joint_pub, ros::Pub
                                 }
                                 it++;
                             }
+                            Eigen::VectorXd ln2 = fit_depth_line(depths);
+                            std::cout<<"line2:"<<depths.size()<<","<<ln2.transpose()<<std::endl;
+                            // for (int i=0;i<3;i++) extra_data.push_back(ln[i]);
                         }
                         // std::cout<<"confidence of spine:"<<depth_changes<<","<<isfinite(depth_changes)<<std::endl;
                     } else if (j==2) {

@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.0.2)
 project(zed_skeleton_tracking)
-add_compile_options(-std=c++14 -funroll-loops -Wall -Ofast)
+add_compile_options(-std=c++14 -funroll-loops -Wall)
 set(CMAKE_BUILD_TYPE Release)
 #add_compile_options(-std=c++11)
 #set(CMAKE_BUILD_TYPE RelWithDebInfo)
