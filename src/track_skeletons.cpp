@@ -2,6 +2,7 @@
 #include <sl/Camera.hpp>
 #include <ros/ros.h>
 #include <std_msgs/Float32MultiArray.h>
+#include <std_msgs/Bool.h>
 #include <thread>
 #include <string>
 #include <opencv2/opencv.hpp>
@@ -10,6 +11,12 @@
 #include <zed_skeleton_tracking/TrackingViewer.hpp>
 #include <math.h>
 #include <Eigen/Dense>
+
+bool pause_tracking = false;
+
+void pause_cb(const std_msgs::Bool::ConstPtr& msg) {
+    pause_tracking = msg->data;
+}
 
 Eigen::Vector4d fit_depth_line(Eigen::VectorXd depths) {
     std::vector<int> good_pts;
@@ -51,7 +58,7 @@ Eigen::Vector4d fit_depth_line(Eigen::VectorXd depths) {
     return params;
 }
 
-void zed_acquisition(int id, sl::Camera& zed, ros::Publisher joint_pub, ros::Publisher img_pub,ros::Publisher depth_pub,sl::Pose cam_pose, bool& run, sl::Timestamp& ts, double dist_lim) {
+void zed_acquisition(int id, sl::Camera& zed, ros::Publisher joint_pub, ros::Publisher img_pub,ros::Publisher depth_pub,sl::Pose cam_pose, bool& run, sl::Timestamp& ts, double dist_lim, bool& pause_tracking) {
 
     
     sl::Plane floor_plane; // floor plane handle
@@ -89,274 +96,278 @@ void zed_acquisition(int id, sl::Camera& zed, ros::Publisher joint_pub, ros::Pub
     sl::float2 img_scale(display_resolution.width / (float)camera_config.resolution.width, display_resolution.height / (float) camera_config.resolution.height);
     
     while (run) {
-        // grab current images and compute depth
-        if (zed.grab() == sl::ERROR_CODE::SUCCESS) {
-            if (need_floor_plane) {
-                if (zed.findFloorPlane(floor_plane, reset_from_floor_plane) == sl::ERROR_CODE::SUCCESS) {
-                    need_floor_plane = false;
+        if (!pause_tracking) {
+            // grab current images and compute depth
+            if (zed.grab() == sl::ERROR_CODE::SUCCESS) {
+                if (need_floor_plane) {
+                    if (zed.findFloorPlane(floor_plane, reset_from_floor_plane) == sl::ERROR_CODE::SUCCESS) {
+                        need_floor_plane = false;
+                    }
                 }
-            }
-            std::vector<sl::ObjectData> bods;
-            // Retrieve Detected Human Bodies
-            zed.retrieveObjects(bodies, objectTracker_parameters_rt);
-            zed.retrieveMeasure(depth_map,sl::MEASURE::DEPTH);
-            cv::Mat depth_img(camera_config.resolution.height,camera_config.resolution.width, CV_32FC1,depth_map.getPtr<float>(sl::MEM::CPU));
+                std::vector<sl::ObjectData> bods;
+                // Retrieve Detected Human Bodies
+                zed.retrieveObjects(bodies, objectTracker_parameters_rt);
+                zed.retrieveMeasure(depth_map,sl::MEASURE::DEPTH);
+                cv::Mat depth_img(camera_config.resolution.height,camera_config.resolution.width, CV_32FC1,depth_map.getPtr<float>(sl::MEM::CPU));
 
-            joints_vec_msg.data.clear();
-            // std::cout<<"camera "<<id<<" body count:"<<bodies.object_list.size()<<" at time "<<ts.getMilliseconds()-start_time<<std::endl;
-            for(int o=0;o<int(bodies.object_list.size());o++) {
-                // std::cout<<"body:"<<o<<std::endl;
-                bool skip_bod = false;
-                std::vector<float> data;
-                std::vector<float> extra_data;
-                for (int j=0;j<int(bodies.object_list[o].keypoint.size());j++) {
-                // for (auto& kp_3d:bodies.object_list[o].keypoint) {
-                    // std::cout<<kp_3d<<std::endl;
-                    sl::float3 kp_3d = bodies.object_list[o].keypoint[j];
-                    // std::cout<<o<<":"<<kp_3d[0]*kp_3d[0]+kp_3d[1]*kp_3d[1]+kp_3d[2]*kp_3d[2]<<std::endl;
-                    if (kp_3d[0]*kp_3d[0]+kp_3d[1]*kp_3d[1]+kp_3d[2]*kp_3d[2]>dist_lim) {
-                        skip_bod = true;
-                        break;
+                joints_vec_msg.data.clear();
+                // std::cout<<"camera "<<id<<" body count:"<<bodies.object_list.size()<<" at time "<<ts.getMilliseconds()-start_time<<std::endl;
+                for(int o=0;o<int(bodies.object_list.size());o++) {
+                    // std::cout<<"body:"<<o<<std::endl;
+                    bool skip_bod = false;
+                    std::vector<float> data;
+                    std::vector<float> extra_data;
+                    for (int j=0;j<int(bodies.object_list[o].keypoint.size());j++) {
+                    // for (auto& kp_3d:bodies.object_list[o].keypoint) {
+                        // std::cout<<kp_3d<<std::endl;
+                        sl::float3 kp_3d = bodies.object_list[o].keypoint[j];
+                        // std::cout<<o<<":"<<kp_3d[0]*kp_3d[0]+kp_3d[1]*kp_3d[1]+kp_3d[2]*kp_3d[2]<<std::endl;
+                        if (kp_3d[0]*kp_3d[0]+kp_3d[1]*kp_3d[1]+kp_3d[2]*kp_3d[2]>dist_lim) {
+                            skip_bod = true;
+                            break;
+                        }
+                        // std::cout<<bodies.object_list[o].keypoint_confidence[j]<<std::endl;
+                        for (int i=0;i<3;i++) {
+                            data.push_back(kp_3d[i]);
+                        }
+                        float depth_changes = 1.0;
+                        if (j==0) {
+                            sl::float2 p1 = bodies.object_list[o].keypoint_2d[0];
+                            sl::float2 p2 = bodies.object_list[o].keypoint_2d[1];
+                            cv::LineIterator it(depth_img, cv::Point(int(p1[0]),int(p1[1])), cv::Point(int(p2[0]),int(p2[1])), 8);
+                            depth_changes = 1.0;
+                            if (it.count>0) {
+                                // Eigen::VectorXd depths(it.count);
+                                depth_changes = 0;
+                                float prev_depth = depth_img.at<float>(it.pos());
+                                for(int i=0; i<it.count; i++)
+                                {   
+                                    float d = depth_img.at<float>(it.pos());
+                                    // depths[i] = d;
+                                    if (isfinite(d)) {
+                                        if (!isfinite(prev_depth)) prev_depth = d;
+                                        depth_changes+=abs(d-prev_depth);
+                                        prev_depth = d;
+                                    }
+                                    it++;
+                                }
+                            }
+                            // std::cout<<"confidence of neck:"<<depth_changes<<","<<isfinite(depth_changes)<<std::endl;
+                        } else if (j==1) {
+                            sl::float2 p1 = bodies.object_list[o].keypoint_2d[1];
+                            sl::float2 p2 = bodies.object_list[o].keypoint_2d[8];
+                            cv::LineIterator it(depth_img, cv::Point(int(p1[0]),int(p1[1])), cv::Point(int(p2[0]),int(p2[1])), 8);
+                            depth_changes = 1.0;
+                            if (it.count>0) {
+                                Eigen::VectorXd depths(it.count);
+                                depth_changes = 0;
+                                float prev_depth = depth_img.at<float>(it.pos());
+                                for(int i=0; i<it.count; i++)
+                                {
+                                    float d = depth_img.at<float>(it.pos());
+                                    depths[i] = d;
+                                    if (isfinite(d)) {
+                                        if (!isfinite(prev_depth)) prev_depth = d;
+                                        depth_changes+=abs(d-prev_depth);
+                                        prev_depth = d;
+                                    }
+                                    it++;
+                                }
+                                Eigen::VectorXd ln1 = fit_depth_line(depths);
+                                std::cout<<"line1:"<<depths.size()<<","<<ln1.transpose()<<std::endl;
+                            }
+                            p1 = bodies.object_list[o].keypoint_2d[1];
+                            p2 = bodies.object_list[o].keypoint_2d[11];
+                            it = cv::LineIterator(depth_img, cv::Point(int(p1[0]),int(p1[1])), cv::Point(int(p2[0]),int(p2[1])), 8);
+                            if (it.count>0) {
+                                Eigen::VectorXd depths(it.count);
+                                float prev_depth = depth_img.at<float>(it.pos());
+                                for(int i=0; i<it.count; i++)
+                                {
+                                    float d = depth_img.at<float>(it.pos());
+                                    depths[i] = d;
+                                    if (isfinite(d)) {
+                                        if (!isfinite(prev_depth)) prev_depth = d;
+                                        depth_changes+=abs(d-prev_depth);
+                                        prev_depth = d;
+                                    }
+                                    it++;
+                                }
+                                Eigen::VectorXd ln2 = fit_depth_line(depths);
+                                std::cout<<"line2:"<<depths.size()<<","<<ln2.transpose()<<std::endl;
+                                // for (int i=0;i<3;i++) extra_data.push_back(ln[i]);
+                            }
+                            // std::cout<<"confidence of spine:"<<depth_changes<<","<<isfinite(depth_changes)<<std::endl;
+                        } else if (j==2) {
+                            sl::float2 p1 = bodies.object_list[o].keypoint_2d[1];
+                            sl::float2 p2 = bodies.object_list[o].keypoint_2d[2];
+                            cv::LineIterator it(depth_img, cv::Point(int(p1[0]),int(p1[1])), cv::Point(int(p2[0]),int(p2[1])), 8);
+                            depth_changes = 1.0;
+                            if (it.count>0) {
+                                depth_changes = 0;
+                                float prev_depth = depth_img.at<float>(it.pos());
+                                for(int i=0; i<it.count; i++)
+                                {
+                                    float d = depth_img.at<float>(it.pos());
+                                    if (isfinite(d)) {
+                                        if (!isfinite(prev_depth)) prev_depth = d;
+                                        depth_changes+=abs(d-prev_depth);
+                                        prev_depth = d;
+                                    }
+                                    it++;
+                                }
+                            }
+                            // std::cout<<"confidence of shoulder:"<<depth_changes<<","<<isfinite(depth_changes)<<std::endl;
+                        } else if (j==3) {
+                            sl::float2 p1 = bodies.object_list[o].keypoint_2d[3];
+                            sl::float2 p2 = bodies.object_list[o].keypoint_2d[2];
+                            cv::LineIterator it(depth_img, cv::Point(int(p1[0]),int(p1[1])), cv::Point(int(p2[0]),int(p2[1])), 8);
+                            depth_changes = 1.0;
+                            if (it.count>0) {
+                                depth_changes = 0;
+                                float prev_depth = depth_img.at<float>(it.pos());
+                                for(int i=0; i<it.count; i++)
+                                {
+                                    float d = depth_img.at<float>(it.pos());
+                                    if (isfinite(d)) {
+                                        if (!isfinite(prev_depth)) prev_depth = d;
+                                        depth_changes+=abs(d-prev_depth);
+                                        prev_depth = d;
+                                    }
+                                    it++;
+                                }
+                            }
+                            // std::cout<<"confidence of elbow:"<<depth_changes<<","<<isfinite(depth_changes)<<std::endl;
+                        } else if (j==4) {
+                            sl::float2 p1 = bodies.object_list[o].keypoint_2d[3];
+                            sl::float2 p2 = bodies.object_list[o].keypoint_2d[4];
+                            cv::LineIterator it(depth_img, cv::Point(int(p1[0]),int(p1[1])), cv::Point(int(p2[0]),int(p2[1])), 8);
+                            depth_changes = 1.0;
+                            if (it.count>0) {
+                                depth_changes = 0;
+                                float prev_depth = depth_img.at<float>(it.pos());
+                                for(int i=0; i<it.count; i++)
+                                {
+                                    float d = depth_img.at<float>(it.pos());
+                                    if (isfinite(d)) {
+                                        if (!isfinite(prev_depth)) prev_depth = d;
+                                        depth_changes+=abs(d-prev_depth);
+                                        prev_depth = d;
+                                    }
+                                    it++;
+                                }
+                            }
+                            // std::cout<<"confidence of wrist:"<<depth_changes<<","<<isfinite(depth_changes)<<std::endl;
+                        } else if (j==5) {
+                            sl::float2 p1 = bodies.object_list[o].keypoint_2d[5];
+                            sl::float2 p2 = bodies.object_list[o].keypoint_2d[1];
+                            cv::LineIterator it(depth_img, cv::Point(int(p1[0]),int(p1[1])), cv::Point(int(p2[0]),int(p2[1])), 8);
+                            depth_changes = 1.0;
+                            if (it.count>0) {
+                                depth_changes = 0;
+                                float prev_depth = depth_img.at<float>(it.pos());
+                                for(int i=0; i<it.count; i++)
+                                {
+                                    float d = depth_img.at<float>(it.pos());
+                                    if (isfinite(d)) {
+                                        if (!isfinite(prev_depth)) prev_depth = d;
+                                        depth_changes+=abs(d-prev_depth);
+                                        prev_depth = d;
+                                    }
+                                    it++;
+                                }
+                            }
+                            // std::cout<<"confidence of shoulder:"<<depth_changes<<","<<isfinite(depth_changes)<<std::endl;
+                        } else if (j==6) {
+                            sl::float2 p1 = bodies.object_list[o].keypoint_2d[5];
+                            sl::float2 p2 = bodies.object_list[o].keypoint_2d[6];
+                            cv::LineIterator it(depth_img, cv::Point(int(p1[0]),int(p1[1])), cv::Point(int(p2[0]),int(p2[1])), 8);
+                            depth_changes = 1.0;
+                            if (it.count>0) {
+                                depth_changes = 0;
+                                float prev_depth = depth_img.at<float>(it.pos());
+                                for(int i=0; i<it.count; i++)
+                                {
+                                    float d = depth_img.at<float>(it.pos());
+                                    if (isfinite(d)) {
+                                        if (!isfinite(prev_depth)) prev_depth = d;
+                                        depth_changes+=abs(d-prev_depth);
+                                        prev_depth = d;
+                                    }
+                                    it++;
+                                }
+                            }
+                            // std::cout<<"confidence of elbow:"<<depth_changes<<","<<isfinite(depth_changes)<<std::endl;
+                        } else if (j==7) {
+                            sl::float2 p1 = bodies.object_list[o].keypoint_2d[6];
+                            sl::float2 p2 = bodies.object_list[o].keypoint_2d[7];
+                            cv::LineIterator it(depth_img, cv::Point(int(p1[0]),int(p1[1])), cv::Point(int(p2[0]),int(p2[1])), 8);
+                            depth_changes = 1.0;
+                            if (it.count>0) {
+                                depth_changes = 0;
+                                float prev_depth = depth_img.at<float>(it.pos());
+                                for(int i=0; i<it.count; i++)
+                                {
+                                    float d = depth_img.at<float>(it.pos());
+                                    if (isfinite(d)) {
+                                        if (!isfinite(prev_depth)) prev_depth = d;
+                                        depth_changes+=abs(d-prev_depth);
+                                        prev_depth = d;
+                                    }
+                                    it++;
+                                }
+                            }
+                            // std::cout<<"confidence of wrist:"<<depth_changes<<","<<isfinite(depth_changes)<<std::endl;
+                        } else if ((j==8)||(j==11)) {
+                            sl::float2 p1 = bodies.object_list[o].keypoint_2d[8];
+                            sl::float2 p2 = bodies.object_list[o].keypoint_2d[11];
+                            cv::LineIterator it(depth_img, cv::Point(int(p1[0]),int(p1[1])), cv::Point(int(p2[0]),int(p2[1])), 8);
+                            depth_changes = 1.0;
+                            if (it.count>0) {
+                                depth_changes = 0;
+                                float prev_depth = depth_img.at<float>(it.pos());
+                                for(int i=0; i<it.count; i++)
+                                {
+                                    float d = depth_img.at<float>(it.pos());
+                                    if (isfinite(d)) {
+                                        if (!isfinite(prev_depth)) prev_depth = d;
+                                        depth_changes+=abs(d-prev_depth);
+                                        prev_depth = d;
+                                    }
+                                    it++;
+                                }
+                            }
+                            // std::cout<<"confidence of hips:"<<depth_changes<<","<<isfinite(depth_changes)<<std::endl;
+                        } 
+                        // else {
+                        //     // std::cout<<"confidence of "<<j<<":"<<depth_changes<<","<<isfinite(depth_changes)<<std::endl;
+                        // }
+                        if (isnan(depth_changes)) depth_changes=1000;
+                        data.push_back(depth_changes); //confidence
                     }
-                    // std::cout<<bodies.object_list[o].keypoint_confidence[j]<<std::endl;
-                    for (int i=0;i<3;i++) {
-                        data.push_back(kp_3d[i]);
+                    if (!skip_bod) {
+                        bods.push_back(bodies.object_list[o]);
+                        joints_vec_msg.data = data;
                     }
-                    float depth_changes = 1.0;
-                    if (j==0) {
-                        sl::float2 p1 = bodies.object_list[o].keypoint_2d[0];
-                        sl::float2 p2 = bodies.object_list[o].keypoint_2d[1];
-                        cv::LineIterator it(depth_img, cv::Point(int(p1[0]),int(p1[1])), cv::Point(int(p2[0]),int(p2[1])), 8);
-                        depth_changes = 1.0;
-                        if (it.count>0) {
-                            // Eigen::VectorXd depths(it.count);
-                            depth_changes = 0;
-                            float prev_depth = depth_img.at<float>(it.pos());
-                            for(int i=0; i<it.count; i++)
-                            {   
-                                float d = depth_img.at<float>(it.pos());
-                                // depths[i] = d;
-                                if (isfinite(d)) {
-                                    if (!isfinite(prev_depth)) prev_depth = d;
-                                    depth_changes+=abs(d-prev_depth);
-                                    prev_depth = d;
-                                }
-                                it++;
-                            }
-                        }
-                        // std::cout<<"confidence of neck:"<<depth_changes<<","<<isfinite(depth_changes)<<std::endl;
-                    } else if (j==1) {
-                        sl::float2 p1 = bodies.object_list[o].keypoint_2d[1];
-                        sl::float2 p2 = bodies.object_list[o].keypoint_2d[8];
-                        cv::LineIterator it(depth_img, cv::Point(int(p1[0]),int(p1[1])), cv::Point(int(p2[0]),int(p2[1])), 8);
-                        depth_changes = 1.0;
-                        if (it.count>0) {
-                            Eigen::VectorXd depths(it.count);
-                            depth_changes = 0;
-                            float prev_depth = depth_img.at<float>(it.pos());
-                            for(int i=0; i<it.count; i++)
-                            {
-                                float d = depth_img.at<float>(it.pos());
-                                depths[i] = d;
-                                if (isfinite(d)) {
-                                    if (!isfinite(prev_depth)) prev_depth = d;
-                                    depth_changes+=abs(d-prev_depth);
-                                    prev_depth = d;
-                                }
-                                it++;
-                            }
-                            Eigen::VectorXd ln1 = fit_depth_line(depths);
-                            std::cout<<"line1:"<<depths.size()<<","<<ln1.transpose()<<std::endl;
-                        }
-                        p1 = bodies.object_list[o].keypoint_2d[1];
-                        p2 = bodies.object_list[o].keypoint_2d[11];
-                        it = cv::LineIterator(depth_img, cv::Point(int(p1[0]),int(p1[1])), cv::Point(int(p2[0]),int(p2[1])), 8);
-                        if (it.count>0) {
-                            Eigen::VectorXd depths(it.count);
-                            float prev_depth = depth_img.at<float>(it.pos());
-                            for(int i=0; i<it.count; i++)
-                            {
-                                float d = depth_img.at<float>(it.pos());
-                                depths[i] = d;
-                                if (isfinite(d)) {
-                                    if (!isfinite(prev_depth)) prev_depth = d;
-                                    depth_changes+=abs(d-prev_depth);
-                                    prev_depth = d;
-                                }
-                                it++;
-                            }
-                            Eigen::VectorXd ln2 = fit_depth_line(depths);
-                            std::cout<<"line2:"<<depths.size()<<","<<ln2.transpose()<<std::endl;
-                            // for (int i=0;i<3;i++) extra_data.push_back(ln[i]);
-                        }
-                        // std::cout<<"confidence of spine:"<<depth_changes<<","<<isfinite(depth_changes)<<std::endl;
-                    } else if (j==2) {
-                        sl::float2 p1 = bodies.object_list[o].keypoint_2d[1];
-                        sl::float2 p2 = bodies.object_list[o].keypoint_2d[2];
-                        cv::LineIterator it(depth_img, cv::Point(int(p1[0]),int(p1[1])), cv::Point(int(p2[0]),int(p2[1])), 8);
-                        depth_changes = 1.0;
-                        if (it.count>0) {
-                            depth_changes = 0;
-                            float prev_depth = depth_img.at<float>(it.pos());
-                            for(int i=0; i<it.count; i++)
-                            {
-                                float d = depth_img.at<float>(it.pos());
-                                if (isfinite(d)) {
-                                    if (!isfinite(prev_depth)) prev_depth = d;
-                                    depth_changes+=abs(d-prev_depth);
-                                    prev_depth = d;
-                                }
-                                it++;
-                            }
-                        }
-                        // std::cout<<"confidence of shoulder:"<<depth_changes<<","<<isfinite(depth_changes)<<std::endl;
-                    } else if (j==3) {
-                        sl::float2 p1 = bodies.object_list[o].keypoint_2d[3];
-                        sl::float2 p2 = bodies.object_list[o].keypoint_2d[2];
-                        cv::LineIterator it(depth_img, cv::Point(int(p1[0]),int(p1[1])), cv::Point(int(p2[0]),int(p2[1])), 8);
-                        depth_changes = 1.0;
-                        if (it.count>0) {
-                            depth_changes = 0;
-                            float prev_depth = depth_img.at<float>(it.pos());
-                            for(int i=0; i<it.count; i++)
-                            {
-                                float d = depth_img.at<float>(it.pos());
-                                if (isfinite(d)) {
-                                    if (!isfinite(prev_depth)) prev_depth = d;
-                                    depth_changes+=abs(d-prev_depth);
-                                    prev_depth = d;
-                                }
-                                it++;
-                            }
-                        }
-                        // std::cout<<"confidence of elbow:"<<depth_changes<<","<<isfinite(depth_changes)<<std::endl;
-                    } else if (j==4) {
-                        sl::float2 p1 = bodies.object_list[o].keypoint_2d[3];
-                        sl::float2 p2 = bodies.object_list[o].keypoint_2d[4];
-                        cv::LineIterator it(depth_img, cv::Point(int(p1[0]),int(p1[1])), cv::Point(int(p2[0]),int(p2[1])), 8);
-                        depth_changes = 1.0;
-                        if (it.count>0) {
-                            depth_changes = 0;
-                            float prev_depth = depth_img.at<float>(it.pos());
-                            for(int i=0; i<it.count; i++)
-                            {
-                                float d = depth_img.at<float>(it.pos());
-                                if (isfinite(d)) {
-                                    if (!isfinite(prev_depth)) prev_depth = d;
-                                    depth_changes+=abs(d-prev_depth);
-                                    prev_depth = d;
-                                }
-                                it++;
-                            }
-                        }
-                        // std::cout<<"confidence of wrist:"<<depth_changes<<","<<isfinite(depth_changes)<<std::endl;
-                    } else if (j==5) {
-                        sl::float2 p1 = bodies.object_list[o].keypoint_2d[5];
-                        sl::float2 p2 = bodies.object_list[o].keypoint_2d[1];
-                        cv::LineIterator it(depth_img, cv::Point(int(p1[0]),int(p1[1])), cv::Point(int(p2[0]),int(p2[1])), 8);
-                        depth_changes = 1.0;
-                        if (it.count>0) {
-                            depth_changes = 0;
-                            float prev_depth = depth_img.at<float>(it.pos());
-                            for(int i=0; i<it.count; i++)
-                            {
-                                float d = depth_img.at<float>(it.pos());
-                                if (isfinite(d)) {
-                                    if (!isfinite(prev_depth)) prev_depth = d;
-                                    depth_changes+=abs(d-prev_depth);
-                                    prev_depth = d;
-                                }
-                                it++;
-                            }
-                        }
-                        // std::cout<<"confidence of shoulder:"<<depth_changes<<","<<isfinite(depth_changes)<<std::endl;
-                    } else if (j==6) {
-                        sl::float2 p1 = bodies.object_list[o].keypoint_2d[5];
-                        sl::float2 p2 = bodies.object_list[o].keypoint_2d[6];
-                        cv::LineIterator it(depth_img, cv::Point(int(p1[0]),int(p1[1])), cv::Point(int(p2[0]),int(p2[1])), 8);
-                        depth_changes = 1.0;
-                        if (it.count>0) {
-                            depth_changes = 0;
-                            float prev_depth = depth_img.at<float>(it.pos());
-                            for(int i=0; i<it.count; i++)
-                            {
-                                float d = depth_img.at<float>(it.pos());
-                                if (isfinite(d)) {
-                                    if (!isfinite(prev_depth)) prev_depth = d;
-                                    depth_changes+=abs(d-prev_depth);
-                                    prev_depth = d;
-                                }
-                                it++;
-                            }
-                        }
-                        // std::cout<<"confidence of elbow:"<<depth_changes<<","<<isfinite(depth_changes)<<std::endl;
-                    } else if (j==7) {
-                        sl::float2 p1 = bodies.object_list[o].keypoint_2d[6];
-                        sl::float2 p2 = bodies.object_list[o].keypoint_2d[7];
-                        cv::LineIterator it(depth_img, cv::Point(int(p1[0]),int(p1[1])), cv::Point(int(p2[0]),int(p2[1])), 8);
-                        depth_changes = 1.0;
-                        if (it.count>0) {
-                            depth_changes = 0;
-                            float prev_depth = depth_img.at<float>(it.pos());
-                            for(int i=0; i<it.count; i++)
-                            {
-                                float d = depth_img.at<float>(it.pos());
-                                if (isfinite(d)) {
-                                    if (!isfinite(prev_depth)) prev_depth = d;
-                                    depth_changes+=abs(d-prev_depth);
-                                    prev_depth = d;
-                                }
-                                it++;
-                            }
-                        }
-                        // std::cout<<"confidence of wrist:"<<depth_changes<<","<<isfinite(depth_changes)<<std::endl;
-                    } else if ((j==8)||(j==11)) {
-                        sl::float2 p1 = bodies.object_list[o].keypoint_2d[8];
-                        sl::float2 p2 = bodies.object_list[o].keypoint_2d[11];
-                        cv::LineIterator it(depth_img, cv::Point(int(p1[0]),int(p1[1])), cv::Point(int(p2[0]),int(p2[1])), 8);
-                        depth_changes = 1.0;
-                        if (it.count>0) {
-                            depth_changes = 0;
-                            float prev_depth = depth_img.at<float>(it.pos());
-                            for(int i=0; i<it.count; i++)
-                            {
-                                float d = depth_img.at<float>(it.pos());
-                                if (isfinite(d)) {
-                                    if (!isfinite(prev_depth)) prev_depth = d;
-                                    depth_changes+=abs(d-prev_depth);
-                                    prev_depth = d;
-                                }
-                                it++;
-                            }
-                        }
-                        // std::cout<<"confidence of hips:"<<depth_changes<<","<<isfinite(depth_changes)<<std::endl;
-                    } 
-                    // else {
-                    //     // std::cout<<"confidence of "<<j<<":"<<depth_changes<<","<<isfinite(depth_changes)<<std::endl;
-                    // }
-                    if (isnan(depth_changes)) depth_changes=1000;
-                    data.push_back(depth_changes); //confidence
+                    // std::cout<<joints_vec_msg<<std::endl;
                 }
-                if (!skip_bod) {
-                    bods.push_back(bodies.object_list[o]);
-                    joints_vec_msg.data = data;
-                }
-                // std::cout<<joints_vec_msg<<std::endl;
+                if (!joints_vec_msg.data.empty()) joint_pub.publish(joints_vec_msg);
+                zed.retrieveImage(image_left, sl::VIEW::LEFT, sl::MEM::CPU, display_resolution);  
+                cv::Mat img_left_cv_mat(display_resolution.height,display_resolution.width, CV_8UC4,image_left.getPtr<sl::uchar1>(sl::MEM::CPU));
+                render_2D(img_left_cv_mat, img_scale, bods, true, sl::BODY_FORMAT::POSE_18);
+                // zed.retrieveImage(image, sl::VIEW::LEFT);            
+                img_msg.format = "jpeg";
+                cv::imencode(".jpg", img_left_cv_mat, img_msg.data);
+                img_pub.publish(img_msg);
+                //put image_left into sensor_msgs/compressed image
+                
+                // zed.retrieveMeasure(point_cloud, sl::MEASURE::XYZRGBA, sl::MEM::GPU, pc_resolution);
+                // zed.getPosition(cam_pose, sl::REFERENCE_FRAME::WORLD);
+                
+                ts = zed.getTimestamp(sl::TIME_REFERENCE::IMAGE);
             }
-            if (!joints_vec_msg.data.empty()) joint_pub.publish(joints_vec_msg);
-            zed.retrieveImage(image_left, sl::VIEW::LEFT, sl::MEM::CPU, display_resolution);  
-            cv::Mat img_left_cv_mat(display_resolution.height,display_resolution.width, CV_8UC4,image_left.getPtr<sl::uchar1>(sl::MEM::CPU));
-            render_2D(img_left_cv_mat, img_scale, bods, true, sl::BODY_FORMAT::POSE_18);
-            // zed.retrieveImage(image, sl::VIEW::LEFT);            
-            img_msg.format = "jpeg";
-            cv::imencode(".jpg", img_left_cv_mat, img_msg.data);
-            img_pub.publish(img_msg);
-            //put image_left into sensor_msgs/compressed image
-            
-			// zed.retrieveMeasure(point_cloud, sl::MEASURE::XYZRGBA, sl::MEM::GPU, pc_resolution);
-			// zed.getPosition(cam_pose, sl::REFERENCE_FRAME::WORLD);
-            
-            ts = zed.getTimestamp(sl::TIME_REFERENCE::IMAGE);
+        } else {
+            ROS_INFO_THROTTLE(10,"tracking paused");
         }
         sl::sleep_ms(1);
     }
@@ -381,6 +392,8 @@ int main(int argc, char **argv) {
     ros::NodeHandle nh;
     ros::AsyncSpinner spinner(1);
     spinner.start();
+
+    ros::Subscriber sub_pause = nh.subscribe<std_msgs::Bool>("/pause_tracking",1,pause_cb);
 
     // Create ZED objects
     sl::InitParameters init_parameters;
@@ -491,7 +504,7 @@ int main(int argc, char **argv) {
             // create an image to store Left+Depth image
             images_lr[z] = cv::Mat(404, 720*2, CV_8UC4);
             // camera acquisition thread
-            thread_pool[z] = std::thread(zed_acquisition, z,std::ref(zeds[z]), joint_pubs[z], img_pubs[z], depth_pubs[z],cam_poses[z], std::ref(run), std::ref(images_ts[z]),dist_lims[z]);
+            thread_pool[z] = std::thread(zed_acquisition, z,std::ref(zeds[z]), joint_pubs[z], img_pubs[z], depth_pubs[z],cam_poses[z], std::ref(run), std::ref(images_ts[z]),dist_lims[z],std::ref(pause_tracking));
         }
 
     ros::waitForShutdown();
