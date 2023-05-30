@@ -44,14 +44,14 @@ void zed_acquisition(int id, sl::Camera& zed, ros::Publisher joint_pub, ros::Pub
     sl::Mat depth_map(display_resolution,sl::MAT_TYPE::F32_C1);
 
     // Configure object detection runtime parameters
-    sl::ObjectDetectionRuntimeParameters objectTracker_parameters_rt;
+    sl::BodyTrackingRuntimeParameters objectTracker_parameters_rt;
     objectTracker_parameters_rt.detection_confidence_threshold = 40;
 
     std_msgs::Float32MultiArray joints_vec_msg;
     sensor_msgs::CompressedImage img_msg;
     sensor_msgs::Image depth_msg;
 
-    sl::Objects bodies;
+    sl::Bodies bodies;
 
     double start_time = zed.getTimestamp(sl::TIME_REFERENCE::IMAGE).getMilliseconds();
 
@@ -65,12 +65,12 @@ void zed_acquisition(int id, sl::Camera& zed, ros::Publisher joint_pub, ros::Pub
             }
             
             // Retrieve Detected Human Bodies
-            zed.retrieveObjects(bodies, objectTracker_parameters_rt);
+            zed.retrieveBodies(bodies, objectTracker_parameters_rt);
             joints_vec_msg.data.clear();
             // std::cout<<"camera "<<id<<" body count:"<<bodies.object_list.size()<<" at time "<<ts.getMilliseconds()-start_time<<std::endl;
-            for(int o=0;o<bodies.object_list.size();o++) {
+            for(int o=0;o<bodies.body_list.size();o++) {
                 // std::cout<<"body:"<<o<<std::endl;
-                for (auto& kp_3d:bodies.object_list[o].keypoint) {
+                for (auto& kp_3d:bodies.body_list[o].keypoint) {
                     // std::cout<<kp_3d<<std::endl;
                     for (int i=0;i<3;i++) {
                         joints_vec_msg.data.push_back(kp_3d[i]*0.001);
@@ -126,7 +126,7 @@ void zed_acquisition(int id, sl::Camera& zed, ros::Publisher joint_pub, ros::Pub
 	image.free();
     point_cloud.free();
     floor_plane.clear();
-    bodies.object_list.clear();
+    bodies.body_list.clear();
 
     // Disable modules
     zed.disableObjectDetection();
@@ -172,11 +172,11 @@ int main(int argc, char **argv) {
     sl::PositionalTrackingParameters positional_tracking_parameters;
     
     // Enable the Objects detection module
-    sl::ObjectDetectionParameters obj_det_params;
+    sl::BodyTrackingParameters obj_det_params;
     obj_det_params.enable_tracking = true; // track people across images flow
     obj_det_params.enable_body_fitting = false; // smooth skeletons moves
-	obj_det_params.body_format = sl::BODY_FORMAT::POSE_18;
-    obj_det_params.detection_model = sl::DETECTION_MODEL::HUMAN_BODY_ACCURATE;
+	obj_det_params.body_format = sl::BODY_FORMAT::BODY_18;
+    obj_det_params.detection_model = sl::BODY_TRACKING_MODEL::HUMAN_BODY_ACCURATE;
 
     std::vector< sl::DeviceProperties> devList = sl::Camera::getDeviceList();
 
@@ -224,7 +224,7 @@ int main(int argc, char **argv) {
                 zeds[z].close();
                 continue;
             }
-            err = zeds[z].enableObjectDetection(obj_det_params);
+            err = zeds[z].enableBodyTracking(obj_det_params);
             if (err != sl::ERROR_CODE::SUCCESS) {
                 ROS_ERROR_STREAM("enable Object Detection"<< err<< "\nExit program.");
                 zeds[z].close();
