@@ -288,7 +288,6 @@ int main(int argc, char **argv) {
     Eigen::Matrix3f rz;
     // rz = Eigen::Quaternionf(0,0,0,1);
     // transform_fixed_to_new.linear() = Eigen::Matrix3f(Eigen::Quaternionf(0,0,0,1));
-    transform_fixed_to_new.translation() = Eigen::Vector3f(-15,-17,0)*0.0254;
 
     std::ofstream outfile;
     std::string path = ros::package::getPath("zed_skeleton_tracking");
@@ -297,6 +296,17 @@ int main(int argc, char **argv) {
     while (ros::ok()) {
 
         if (calibrate_transform) {
+            std::vector<float> origin = {-0.381,-0.4318,0.0};
+            if (!nh.getParam("/cam_calibrate/origin",origin))
+            {
+                ROS_WARN("/cam_calibrate/origin is not defined");
+            } else {
+                ROS_INFO_STREAM("origin:"<<origin[0]<<","<<origin[1]<<","<<origin[2]);
+            }
+            Eigen::Vector3f origin2;
+            for (int i=0;i<3;i++) origin2[i] = origin[i];
+            transform_fixed_to_new.translation() = origin2; //Eigen::Vector3f(-15,-17,0)*0.0254;
+
             pixels[l_cam_id] = transform_pixels_l;
             pixels[r_cam_id] = transform_pixels_r;
 

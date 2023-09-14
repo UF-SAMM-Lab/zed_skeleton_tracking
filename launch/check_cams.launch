@@ -2,6 +2,8 @@
   
   <arg name="tracker" default="0" />
   <param name="tracker" value="$(arg tracker)"/>
+  <arg name="origin" default="-0.381,-0.4318,0" />
+  <param name="cam_calibrate/origin" value="$(arg origin)"/>
   <node name="calibrate" pkg="zed_skeleton_tracking" type="calibrate" respawn="false" output="screen">
   </node>
 

@@ -22,7 +22,7 @@ void createSKPrimitive(sl::BodyData& body, const std::vector<std::pair<T, T>>&ma
 #if (defined(CV_VERSION_EPOCH) && CV_VERSION_EPOCH == 2)
             cv::line(left_display, kp_a, kp_b, color, 1);
 #else
-            cv::line(left_display, kp_a, kp_b, color, 1, cv::LINE_AA);
+            cv::line(left_display, kp_a, kp_b, color, 2, cv::LINE_AA);
 #endif
         }
     }

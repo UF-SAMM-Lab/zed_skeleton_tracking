@@ -174,7 +174,7 @@ void zed_acquisition(int id, sl::Camera& zed, ros::Publisher joint_pub, ros::Pub
                                     it++;
                                 }
                                 Eigen::VectorXd ln1 = fit_depth_line(depths);
-                                std::cout<<"line1:"<<depths.size()<<","<<ln1.transpose()<<std::endl;
+                                // std::cout<<"line1:"<<depths.size()<<","<<ln1.transpose()<<std::endl;
                             }
                             p1 = bodies.body_list[o].keypoint_2d[1];
                             p2 = bodies.body_list[o].keypoint_2d[11];
@@ -194,7 +194,7 @@ void zed_acquisition(int id, sl::Camera& zed, ros::Publisher joint_pub, ros::Pub
                                     it++;
                                 }
                                 Eigen::VectorXd ln2 = fit_depth_line(depths);
-                                std::cout<<"line2:"<<depths.size()<<","<<ln2.transpose()<<std::endl;
+                                // std::cout<<"line2:"<<depths.size()<<","<<ln2.transpose()<<std::endl;
                                 // for (int i=0;i<3;i++) extra_data.push_back(ln[i]);
                             }
                             // std::cout<<"confidence of spine:"<<depth_changes<<","<<isfinite(depth_changes)<<std::endl;
@@ -347,7 +347,9 @@ void zed_acquisition(int id, sl::Camera& zed, ros::Publisher joint_pub, ros::Pub
                     }
                     if (!skip_bod) {
                         bods.push_back(bodies.body_list[o]);
-                        joints_vec_msg.data = data;
+                        if (bods.size()==1) {
+                            joints_vec_msg.data = data;
+                        }
                     }
                     // std::cout<<joints_vec_msg<<std::endl;
                 }
@@ -477,7 +479,7 @@ int main(int argc, char **argv) {
             joint_pubs[z] = nh.advertise<std_msgs::Float32MultiArray>(pub_topic_name,0);
             if (cam_info.serial_number==29580072) {
                 pub_topic_name = "/cameraR/";
-                dist_lims[z] = 9;
+                dist_lims[z] = 16;
             } else if (cam_info.serial_number==29191725) {
                 pub_topic_name = "/cameraL/";
                 dist_lims[z] = 16;
